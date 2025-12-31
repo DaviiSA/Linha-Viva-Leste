@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Package, CheckSquare, List, Plus, Minus, Search, FileDown, ShieldAlert, CheckCircle2, XCircle } from 'lucide-react';
+import { Package, CheckSquare, List, Plus, Minus, Search, FileDown, ShieldAlert, CheckCircle2, XCircle, CloudSync } from 'lucide-react';
 import { storage } from '../services/storage';
 import { InventoryItem, MaterialRequest, StockTransaction } from '../types';
 
@@ -16,7 +16,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
   const [requests, setRequests] = useState<MaterialRequest[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Stock update modal
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [updateQty, setUpdateQty] = useState<number>(0);
   const [updateReason, setUpdateReason] = useState('Entrada de Estoque');
@@ -37,7 +36,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
     }
   };
 
-  const handleUpdateStock = (type: 'entrada' | 'saida') => {
+  const handleUpdateStock = async (type: 'entrada' | 'saida') => {
     if (!selectedItem || updateQty <= 0) return;
     if (type === 'saida' && selectedItem.quantity < updateQty) {
       alert('Estoque insuficiente para essa saída!');
@@ -53,7 +52,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
       reason: updateReason
     };
 
-    storage.saveTransaction(tx);
+    await storage.saveTransaction(tx);
     setInventory(storage.getInventory());
     setSelectedItem(null);
     setUpdateQty(0);
@@ -63,7 +62,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
   const handleRequestStatus = (id: string, status: MaterialRequest['status']) => {
     const success = storage.updateRequestStatus(id, status);
     if (!success && status === 'Atendido') {
-      alert('Erro: Saldo insuficiente em estoque para atender este pedido integralmente!');
+      alert('Erro: Saldo insuficiente em estoque!');
     }
     setRequests(storage.getRequests());
     setInventory(storage.getInventory());
@@ -139,14 +138,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
           </button>
         </div>
         
-        {activeTab === 'estoque' && (
-          <button 
-            onClick={exportToExcel}
-            className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm active:scale-95 w-full sm:w-auto justify-center"
-          >
-            <FileDown size={18} /> Exportar XLSX
-          </button>
-        )}
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+           <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest border border-blue-100">
+             <CloudSync size={14} /> Cloud DB Ativo
+           </div>
+          {activeTab === 'estoque' && (
+            <button 
+              onClick={exportToExcel}
+              className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm active:scale-95 flex-1 sm:flex-none justify-center"
+            >
+              <FileDown size={18} /> Excel
+            </button>
+          )}
+        </div>
       </div>
 
       {activeTab === 'estoque' ? (
@@ -156,7 +160,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
               <input 
                 type="text" 
-                placeholder="Filtrar por nome ou código do material..." 
+                placeholder="Filtrar materiais..." 
                 className="w-full pl-12 pr-4 py-3.5 border-2 border-slate-100 rounded-2xl text-sm focus:border-energisa-blue focus:bg-white bg-white transition-all text-slate-900 font-semibold outline-none shadow-sm"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -196,84 +200,62 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
               </tbody>
             </table>
           </div>
-          {filteredInventory.length === 0 && (
-            <div className="p-20 text-center">
-              <Package size={48} className="mx-auto text-slate-200 mb-4" />
-              <p className="text-slate-400 font-medium">Nenhum material encontrado.</p>
-            </div>
-          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in slide-in-from-bottom duration-500">
-          {requests.length === 0 ? (
-            <div className="col-span-full bg-white p-20 text-center rounded-3xl border border-dashed border-slate-300">
-              <List className="mx-auto text-slate-200 mb-4" size={64} />
-              <p className="text-slate-400 font-bold">Nenhuma solicitação no sistema.</p>
-            </div>
-          ) : (
-            requests.map(req => (
-              <div key={req.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-lg hover:shadow-2xl transition-all space-y-4 group">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="w-2 h-2 rounded-full bg-energisa-orange animate-pulse"></div>
-                      <h4 className="font-black text-xl text-slate-800">VTR {req.vtr}</h4>
-                    </div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">
-                      {req.requesterName} &bull; {new Date(req.date).toLocaleString('pt-BR')}
-                    </p>
+          {requests.map(req => (
+            <div key={req.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-lg hover:shadow-2xl transition-all space-y-4 group">
+              <div className="flex justify-between items-start">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-energisa-orange animate-pulse"></div>
+                    <h4 className="font-black text-xl text-slate-800">VTR {req.vtr}</h4>
                   </div>
-                  <div className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${
-                    req.status === 'Atendido' ? 'bg-emerald-100 text-emerald-700' : 
-                    req.status === 'Não Atendido' ? 'bg-rose-100 text-rose-700' : 
-                    'bg-amber-100 text-amber-700'
-                  }`}>
-                    {req.status}
-                  </div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">
+                    {req.requesterName} &bull; {new Date(req.date).toLocaleString('pt-BR')}
+                  </p>
                 </div>
-                
-                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Itens Solicitados</p>
-                  <ul className="space-y-2">
-                    {req.items.map((item, idx) => {
-                      const invItem = inventory.find(i => i.id === item.materialId);
-                      const hasStock = invItem ? invItem.quantity >= item.quantity : false;
-                      return (
-                        <li key={idx} className="flex items-center justify-between group/item">
-                          <span className={`text-sm font-medium truncate mr-2 ${!hasStock && req.status === 'Pendente' ? 'text-rose-500' : 'text-slate-600'}`}>
-                            {item.materialName}
-                            {!hasStock && req.status === 'Pendente' && " (Saldo Insuficiente!)"}
-                          </span>
-                          <span className="text-sm font-black text-slate-800 bg-white px-2 py-0.5 rounded-lg border border-slate-200">x{item.quantity}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                <div className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${
+                  req.status === 'Atendido' ? 'bg-emerald-100 text-emerald-700' : 
+                  req.status === 'Não Atendido' ? 'bg-rose-100 text-rose-700' : 
+                  'bg-amber-100 text-amber-700'
+                }`}>
+                  {req.status}
                 </div>
-
-                {req.status === 'Pendente' && (
-                  <div className="flex gap-3 pt-2">
-                    <button 
-                      onClick={() => handleRequestStatus(req.id, 'Atendido')}
-                      className="flex-1 bg-emerald-600 text-white py-3 rounded-2xl text-xs font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95"
-                    >
-                      <CheckCircle2 size={16} /> Atender
-                    </button>
-                    <button 
-                      onClick={() => handleRequestStatus(req.id, 'Não Atendido')}
-                      className="flex-1 border-2 border-slate-200 text-slate-500 py-3 rounded-2xl text-xs font-bold hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all flex items-center justify-center gap-2 active:scale-95"
-                    >
-                      <XCircle size={16} /> Negar
-                    </button>
-                  </div>
-                )}
               </div>
-            ))
-          )}
+              
+              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                <ul className="space-y-2">
+                  {req.items.map((item, idx) => (
+                    <li key={idx} className="flex items-center justify-between text-sm">
+                      <span className="text-slate-600 truncate mr-2">{item.materialName}</span>
+                      <span className="font-black text-slate-800">x{item.quantity}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {req.status === 'Pendente' && (
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    onClick={() => handleRequestStatus(req.id, 'Atendido')}
+                    className="flex-1 bg-emerald-600 text-white py-3 rounded-2xl text-xs font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                  >
+                    <CheckCircle2 size={16} /> Atender
+                  </button>
+                  <button 
+                    onClick={() => handleRequestStatus(req.id, 'Não Atendido')}
+                    className="flex-1 border-2 border-slate-200 text-slate-500 py-3 rounded-2xl text-xs font-bold hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all flex items-center justify-center gap-2"
+                  >
+                    <XCircle size={16} /> Negar
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Modal Ajuste de Estoque */}
       {selectedItem && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-md rounded-[2.5rem] p-8 space-y-6 shadow-2xl border border-white animate-in zoom-in duration-300">
@@ -301,12 +283,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
                 </div>
               </div>
               <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Quantidade do Lote</label>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Quantidade</label>
                 <input 
                   type="number" 
-                  className="w-full p-5 border-2 border-slate-100 rounded-3xl bg-slate-50 focus:border-energisa-blue focus:bg-white text-xl font-black text-slate-900 transition-all outline-none"
+                  className="w-full p-5 border-2 border-slate-100 rounded-3xl bg-slate-50 focus:border-energisa-blue focus:bg-white text-xl font-black text-slate-900 outline-none"
                   value={updateQty || ''}
-                  placeholder="0"
                   onChange={(e) => setUpdateQty(Math.max(0, Number(e.target.value)))}
                 />
               </div>
@@ -320,11 +301,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
                 />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={() => handleUpdateStock('saida')} className="flex-1 bg-rose-600 text-white py-5 rounded-[1.5rem] font-black hover:bg-rose-700 transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2">
-                  <Minus size={18} /> Registrar Saída
+                <button onClick={() => handleUpdateStock('saida')} className="flex-1 bg-rose-600 text-white py-5 rounded-[1.5rem] font-black shadow-lg active:scale-95 flex items-center justify-center gap-2">
+                  <Minus size={18} /> Saída
                 </button>
-                <button onClick={() => handleUpdateStock('entrada')} className="flex-1 bg-emerald-600 text-white py-5 rounded-[1.5rem] font-black hover:bg-emerald-700 transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2">
-                  <Plus size={18} /> Registrar Entrada
+                <button onClick={() => handleUpdateStock('entrada')} className="flex-1 bg-emerald-600 text-white py-5 rounded-[1.5rem] font-black shadow-lg active:scale-95 flex items-center justify-center gap-2">
+                  <Plus size={18} /> Entrada
                 </button>
               </div>
             </div>
