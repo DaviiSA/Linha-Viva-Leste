@@ -2,8 +2,8 @@
 import { InventoryItem, MaterialRequest, StockTransaction } from '../types';
 import { MATERIALS } from '../constants';
 
-// COLE AQUI A URL GERADA NA IMPLANTAÇÃO DO GOOGLE APPS SCRIPT
-const GOOGLE_SHEET_WEBAPP_URL = ""; 
+// URL configurada para integração com Google Planilhas
+const GOOGLE_SHEET_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbygxD9-cbkB3mj7gxAwfYfF8VGMFSNcB10_VYcBz5n04nopu5dAoTdZfT0WUSVRMGaR/exec"; 
 
 const KEYS = {
   INVENTORY: 'lv_inventory',
@@ -22,8 +22,6 @@ export const storage = {
 
   saveInventory: (items: InventoryItem[]) => {
     localStorage.setItem(KEYS.INVENTORY, JSON.stringify(items));
-    // Sincroniza o estado atual do estoque (sobrescreve ou atualiza)
-    // Para simplificar o banco de dados, registramos as transações
   },
 
   getRequests: (): MaterialRequest[] => {
@@ -77,8 +75,6 @@ export const storage = {
     const updatedRequests = currentRequests.map(r => r.id === id ? { ...r, status } : r);
     localStorage.setItem(KEYS.REQUESTS, JSON.stringify(updatedRequests));
     
-    // Atualiza status na planilha (Opcional: Requer lógica de busca no Apps Script)
-    // Por padrão, adicionamos uma nova linha de transação
     return true;
   },
 
@@ -118,14 +114,14 @@ export const storage = {
 
   syncToCloud: async (sheetName: string, rows: any[]) => {
     if (!GOOGLE_SHEET_WEBAPP_URL) {
-      console.warn("https://script.google.com/macros/s/AKfycbygxD9-cbkB3mj7gxAwfYfF8VGMFSNcB10_VYcBz5n04nopu5dAoTdZfT0WUSVRMGaR/exec");
+      console.warn("URL do Google Sheets não configurada.");
       return;
     }
 
     try {
       await fetch(GOOGLE_SHEET_WEBAPP_URL, {
         method: 'POST',
-        mode: 'no-cors', // Necessário para Google Apps Script
+        mode: 'no-cors', 
         cache: 'no-cache',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
