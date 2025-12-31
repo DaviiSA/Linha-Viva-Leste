@@ -1,16 +1,36 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Home from './components/Home';
 import AdminPanel from './components/AdminPanel';
 import RequestForm from './components/RequestForm';
 import { Layout } from './components/Layout';
+import { storage } from './services/storage';
 
 type Screen = 'home' | 'admin' | 'request';
 
 const App: React.FC = () => {
   const [currentScreen, setCurrentScreen] = useState<Screen>('home');
+  const [isSyncing, setIsSyncing] = useState(true);
+
+  useEffect(() => {
+    const initApp = async () => {
+      setIsSyncing(true);
+      await storage.fetchInventoryFromCloud();
+      setIsSyncing(false);
+    };
+    initApp();
+  }, []);
 
   const renderScreen = () => {
+    if (isSyncing) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+          <div className="w-12 h-12 border-4 border-energisa-blue border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-slate-500 font-bold animate-pulse uppercase text-[10px] tracking-widest">Sincronizando com a Nuvem...</p>
+        </div>
+      );
+    }
+
     switch (currentScreen) {
       case 'home':
         return <Home onNavigate={setCurrentScreen} />;

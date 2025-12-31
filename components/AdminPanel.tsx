@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Package, CheckSquare, List, Plus, Minus, Search, FileDown, ShieldAlert, CheckCircle2, XCircle, CloudSync } from 'lucide-react';
+import { Package, CheckSquare, List, Plus, Minus, Search, FileDown, ShieldAlert, CheckCircle2, XCircle, CloudSync, RefreshCw } from 'lucide-react';
 import { storage } from '../services/storage';
 import { InventoryItem, MaterialRequest, StockTransaction } from '../types';
 
@@ -15,15 +15,25 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [requests, setRequests] = useState<MaterialRequest[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [updateQty, setUpdateQty] = useState<number>(0);
   const [updateReason, setUpdateReason] = useState('Entrada de Estoque');
 
+  const loadData = async (forceCloud = false) => {
+    if (forceCloud) {
+      setIsRefreshing(true);
+      await storage.fetchInventoryFromCloud();
+      setIsRefreshing(false);
+    }
+    setInventory(storage.getInventory());
+    setRequests(storage.getRequests());
+  };
+
   useEffect(() => {
     if (isAuthenticated) {
-      setInventory(storage.getInventory());
-      setRequests(storage.getRequests());
+      loadData();
     }
   }, [isAuthenticated, activeTab]);
 
@@ -53,19 +63,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
     };
 
     await storage.saveTransaction(tx);
-    setInventory(storage.getInventory());
+    loadData();
     setSelectedItem(null);
     setUpdateQty(0);
     setUpdateReason('Entrada de Estoque');
   };
 
-  const handleRequestStatus = (id: string, status: MaterialRequest['status']) => {
+  const handleRequestStatus = async (id: string, status: MaterialRequest['status']) => {
     const success = storage.updateRequestStatus(id, status);
     if (!success && status === 'Atendido') {
       alert('Erro: Saldo insuficiente em estoque!');
     }
-    setRequests(storage.getRequests());
-    setInventory(storage.getInventory());
+    loadData();
   };
 
   const exportToExcel = () => {
@@ -139,9 +148,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
         </div>
         
         <div className="flex items-center gap-3 w-full sm:w-auto">
-           <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest border border-blue-100">
-             <CloudSync size={14} /> Cloud DB Ativo
-           </div>
+           <button 
+             onClick={() => loadData(true)}
+             disabled={isRefreshing}
+             className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest border border-blue-100 hover:bg-blue-100 transition-all active:scale-95 disabled:opacity-50"
+           >
+             <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} /> 
+             {isRefreshing ? 'Sincronizando...' : 'Sincronizar Nuvem'}
+           </button>
           {activeTab === 'estoque' && (
             <button 
               onClick={exportToExcel}

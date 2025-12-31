@@ -2,7 +2,6 @@
 import { InventoryItem, MaterialRequest, StockTransaction } from '../types';
 import { MATERIALS } from '../constants';
 
-// URL configurada para integração com Google Planilhas
 const GOOGLE_SHEET_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbygxD9-cbkB3mj7gxAwfYfF8VGMFSNcB10_VYcBz5n04nopu5dAoTdZfT0WUSVRMGaR/exec"; 
 
 const KEYS = {
@@ -12,6 +11,29 @@ const KEYS = {
 };
 
 export const storage = {
+  // Busca o inventário da nuvem (Google Sheets)
+  fetchInventoryFromCloud: async (): Promise<InventoryItem[] | null> => {
+    try {
+      const response = await fetch(GOOGLE_SHEET_WEBAPP_URL);
+      const cloudData = await response.json();
+      
+      // Mapeia os dados da planilha para o formato do App
+      const syncedInventory = MATERIALS.map(m => {
+        const cloudItem = cloudData.find((c: any) => c.Código == m.code || c.Código == m.id);
+        return {
+          ...m,
+          quantity: cloudItem ? Number(cloudItem['Saldo Atual'] || cloudItem.Saldo || 0) : 0
+        };
+      });
+
+      storage.saveInventory(syncedInventory);
+      return syncedInventory;
+    } catch (error) {
+      console.error("Erro ao baixar dados da nuvem:", error);
+      return null;
+    }
+  },
+
   getInventory: (): InventoryItem[] => {
     const data = localStorage.getItem(KEYS.INVENTORY);
     if (!data) {
@@ -34,7 +56,6 @@ export const storage = {
     const updated = [req, ...current];
     localStorage.setItem(KEYS.REQUESTS, JSON.stringify(updated));
     
-    // Sincroniza com Google Sheets
     const rows = [
       new Date().toLocaleString('pt-BR'),
       req.vtr,
@@ -74,7 +95,6 @@ export const storage = {
 
     const updatedRequests = currentRequests.map(r => r.id === id ? { ...r, status } : r);
     localStorage.setItem(KEYS.REQUESTS, JSON.stringify(updatedRequests));
-    
     return true;
   },
 
@@ -98,7 +118,6 @@ export const storage = {
       }
       storage.saveInventory(inventory);
       
-      // Sincroniza Transação com Google Sheets
       const rows = [
         new Date(tx.date).toLocaleString('pt-BR'),
         inventory[itemIdx].code,
@@ -106,18 +125,14 @@ export const storage = {
         tx.type.toUpperCase(),
         tx.quantity,
         tx.reason,
-        inventory[itemIdx].quantity // Saldo após movimento
+        inventory[itemIdx].quantity 
       ];
       await storage.syncToCloud('Transacoes', rows);
     }
   },
 
   syncToCloud: async (sheetName: string, rows: any[]) => {
-    if (!GOOGLE_SHEET_WEBAPP_URL) {
-      console.warn("URL do Google Sheets não configurada.");
-      return;
-    }
-
+    if (!GOOGLE_SHEET_WEBAPP_URL) return;
     try {
       await fetch(GOOGLE_SHEET_WEBAPP_URL, {
         method: 'POST',
@@ -130,9 +145,8 @@ export const storage = {
           rows: rows
         })
       });
-      console.log(`Dados enviados para aba ${sheetName} com sucesso.`);
     } catch (error) {
-      console.error("Erro ao sincronizar com Google Sheets:", error);
+      console.error("Erro ao sincronizar:", error);
     }
   }
 };
