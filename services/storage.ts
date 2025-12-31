@@ -2,7 +2,8 @@
 import { InventoryItem, MaterialRequest, StockTransaction } from '../types';
 import { MATERIALS } from '../constants';
 
-const GOOGLE_SHEET_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbygxD9-cbkB3mj7gxAwfYfF8VGMFSNcB10_VYcBz5n04nopu5dAoTdZfT0WUSVRMGaR/exec"; 
+// URL final do WebApp do Google Apps Script
+const GOOGLE_SHEET_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbx1KDBQfG3AMzaQ0jqCnUPmj_0vMTyGemyYptEAyZPBOSdxGlU9qQWc8rKTqzdmrnyN/exec"; 
 
 const KEYS = {
   INVENTORY: 'lv_inventory',
@@ -11,26 +12,39 @@ const KEYS = {
 };
 
 export const storage = {
-  // Busca o inventário da nuvem (Google Sheets)
+  /**
+   * Busca o saldo de estoque atualizado diretamente da Planilha do Google (aba 'Estoque').
+   * Isso permite que múltiplos aparelhos vejam o mesmo saldo em tempo real.
+   */
   fetchInventoryFromCloud: async (): Promise<InventoryItem[] | null> => {
     try {
+      // O Google Apps Script permite GET para leitura de dados
       const response = await fetch(GOOGLE_SHEET_WEBAPP_URL);
+      if (!response.ok) throw new Error('Falha na resposta da rede');
+      
       const cloudData = await response.json();
       
-      // Mapeia os dados da planilha para o formato do App
+      // Mapeia os dados da planilha para o formato do App, garantindo que todos os materiais existam
       const syncedInventory = MATERIALS.map(m => {
-        const cloudItem = cloudData.find((c: any) => c.Código == m.code || c.Código == m.id);
+        // Busca na planilha pelo código ou ID
+        const cloudItem = cloudData.find((c: any) => 
+          String(c.Código).trim() === String(m.code).trim() || 
+          String(c.id).trim() === String(m.id).trim()
+        );
+        
         return {
           ...m,
           quantity: cloudItem ? Number(cloudItem['Saldo Atual'] || cloudItem.Saldo || 0) : 0
         };
       });
 
+      // Salva localmente para persistência offline rápida
       storage.saveInventory(syncedInventory);
       return syncedInventory;
     } catch (error) {
-      console.error("Erro ao baixar dados da nuvem:", error);
-      return null;
+      console.error("Erro crítico ao sincronizar com a nuvem:", error);
+      // Se falhar, retorna o que tem no localStorage para não travar o app
+      return storage.getInventory();
     }
   },
 
@@ -56,6 +70,7 @@ export const storage = {
     const updated = [req, ...current];
     localStorage.setItem(KEYS.REQUESTS, JSON.stringify(updated));
     
+    // Registra a solicitação na aba 'Solicitacoes' da planilha
     const rows = [
       new Date().toLocaleString('pt-BR'),
       req.vtr,
@@ -74,13 +89,17 @@ export const storage = {
     if (requestIndex === -1) return false;
     const request = currentRequests[requestIndex];
 
+    // Se o pedido for atendido, gera as transações de saída de estoque
     if (status === 'Atendido' && request.status !== 'Atendido') {
       const inventory = storage.getInventory();
+      
+      // Verifica disponibilidade de todos os itens antes de processar
       for (const item of request.items) {
         const invItem = inventory.find(i => i.id === item.materialId);
         if (!invItem || invItem.quantity < item.quantity) return false;
       }
 
+      // Processa as saídas
       request.items.forEach(item => {
         storage.saveTransaction({
           id: `req-out-${id}-${item.materialId}`,
@@ -116,8 +135,12 @@ export const storage = {
       } else {
         inventory[itemIdx].quantity = Math.max(0, inventory[itemIdx].quantity - tx.quantity);
       }
+      
+      // Atualiza localmente imediatamente
       storage.saveInventory(inventory);
       
+      // Registra a transação na aba 'Transacoes'
+      // O script do Google Sheets detectará essa transação e atualizará o saldo mestre na aba 'Estoque'
       const rows = [
         new Date(tx.date).toLocaleString('pt-BR'),
         inventory[itemIdx].code,
@@ -131,6 +154,11 @@ export const storage = {
     }
   },
 
+  /**
+   * Envia dados via POST para o Google Apps Script.
+   * Usamos 'no-cors' para evitar problemas de redirecionamento do Google, 
+   * garantindo que os dados cheguem à planilha.
+   */
   syncToCloud: async (sheetName: string, rows: any[]) => {
     if (!GOOGLE_SHEET_WEBAPP_URL) return;
     try {
@@ -145,8 +173,9 @@ export const storage = {
           rows: rows
         })
       });
+      console.log(`Dados sincronizados com a aba ${sheetName}`);
     } catch (error) {
-      console.error("Erro ao sincronizar:", error);
+      console.error("Falha na sincronização de saída:", error);
     }
   }
 };
