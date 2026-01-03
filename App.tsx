@@ -14,9 +14,15 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const initApp = async () => {
-      setIsSyncing(true);
-      await storage.fetchInventoryFromCloud();
-      setIsSyncing(false);
+      try {
+        setIsSyncing(true);
+        // Tenta sincronizar, mas continua mesmo se falhar
+        await storage.fetchInventoryFromCloud();
+      } catch (err) {
+        console.warn("Falha na sincronização inicial, entrando em modo offline.");
+      } finally {
+        setIsSyncing(false);
+      }
     };
     initApp();
   }, []);
@@ -26,7 +32,7 @@ const App: React.FC = () => {
       return (
         <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
           <div className="w-12 h-12 border-4 border-energisa-blue border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-slate-500 font-bold animate-pulse uppercase text-[10px] tracking-widest">Sincronizando com a Nuvem...</p>
+          <p className="text-slate-500 font-bold animate-pulse uppercase text-[10px] tracking-widest">Conectando ao Neon Database...</p>
         </div>
       );
     }

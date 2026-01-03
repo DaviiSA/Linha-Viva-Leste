@@ -1,9 +1,21 @@
 
+import { neon } from '@neondatabase/serverless';
 import { InventoryItem, MaterialRequest, StockTransaction } from '../types';
 import { MATERIALS } from '../constants';
 
-// URL final do WebApp do Google Apps Script
-const GOOGLE_SHEET_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbx1KDBQfG3AMzaQ0jqCnUPmj_0vMTyGemyYptEAyZPBOSdxGlU9qQWc8rKTqzdmrnyN/exec"; 
+// Tenta obter a URL do ambiente com segurança
+const getDatabaseUrl = () => {
+  try {
+    return process.env.DATABASE_URL || "";
+  } catch (e) {
+    return "";
+  }
+};
+
+const DATABASE_URL = getDatabaseUrl();
+
+// Inicializa o cliente SQL apenas se a URL existir
+const sql = DATABASE_URL ? neon(DATABASE_URL) : null;
 
 const KEYS = {
   INVENTORY: 'lv_inventory',
@@ -13,46 +25,106 @@ const KEYS = {
 
 export const storage = {
   /**
-   * Busca o saldo de estoque atualizado diretamente da Planilha do Google (aba 'Estoque').
-   * Isso permite que múltiplos aparelhos vejam o mesmo saldo em tempo real.
+   * Inicializa o banco de dados criando as tabelas se não existirem.
    */
-  fetchInventoryFromCloud: async (): Promise<InventoryItem[] | null> => {
+  initDb: async () => {
+    if (!sql) return;
     try {
-      // O Google Apps Script permite GET para leitura de dados
-      const response = await fetch(GOOGLE_SHEET_WEBAPP_URL);
-      if (!response.ok) throw new Error('Falha na resposta da rede');
+      await sql`
+        CREATE TABLE IF NOT EXISTS inventory (
+          id TEXT PRIMARY KEY,
+          code TEXT NOT NULL,
+          name TEXT NOT NULL,
+          quantity INTEGER DEFAULT 0
+        )
+      `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS requests (
+          id TEXT PRIMARY KEY,
+          vtr TEXT NOT NULL,
+          requester_name TEXT NOT NULL,
+          items JSONB NOT NULL,
+          status TEXT DEFAULT 'Pendente',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS transactions (
+          id TEXT PRIMARY KEY,
+          material_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          quantity INTEGER NOT NULL,
+          reason TEXT,
+          balance_after INTEGER,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+    } catch (e) {
+      console.error("Erro ao inicializar tabelas no Neon:", e);
+      throw e;
+    }
+  },
+
+  fetchInventoryFromCloud: async (): Promise<InventoryItem[] | null> => {
+    if (!sql) {
+      console.warn("Neon Database: URL não configurada. Usando modo offline.");
+      return storage.getInventory();
+    }
+
+    try {
+      await storage.initDb();
+
+      const cloudData = await sql`SELECT * FROM inventory`;
       
-      const cloudData = await response.json();
-      
-      // Mapeia os dados da planilha para o formato do App, garantindo que todos os materiais existam
+      if (cloudData.length === 0) {
+        console.log("Neon Database: Populando banco inicial...");
+        for (const m of MATERIALS) {
+          await sql`
+            INSERT INTO inventory (id, code, name, quantity) 
+            VALUES (${m.id}, ${m.code}, ${m.name}, 0)
+            ON CONFLICT (id) DO NOTHING
+          `;
+        }
+        const initial = MATERIALS.map(m => ({ ...m, quantity: 0 }));
+        storage.saveInventory(initial);
+        return initial;
+      }
+
       const syncedInventory = MATERIALS.map(m => {
-        // Busca na planilha pelo código ou ID
-        const cloudItem = cloudData.find((c: any) => 
-          String(c.Código).trim() === String(m.code).trim() || 
-          String(c.id).trim() === String(m.id).trim()
-        );
-        
+        const cloudItem = cloudData.find((c: any) => c.id === m.id);
         return {
           ...m,
-          quantity: cloudItem ? Number(cloudItem['Saldo Atual'] || cloudItem.Saldo || 0) : 0
+          quantity: cloudItem ? Number(cloudItem.quantity) : 0
         };
       });
 
-      // Salva localmente para persistência offline rápida
       storage.saveInventory(syncedInventory);
+      
+      try {
+        const cloudRequests = await sql`SELECT * FROM requests ORDER BY created_at DESC LIMIT 50`;
+        const formattedRequests: MaterialRequest[] = cloudRequests.map((r: any) => ({
+          id: r.id,
+          vtr: r.vtr,
+          requesterName: r.requester_name,
+          date: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+          items: r.items,
+          status: r.status
+        }));
+        localStorage.setItem(KEYS.REQUESTS, JSON.stringify(formattedRequests));
+      } catch (reqErr) {
+        console.warn("Erro ao carregar solicitações do Neon:", reqErr);
+      }
+
       return syncedInventory;
     } catch (error) {
-      console.error("Erro crítico ao sincronizar com a nuvem:", error);
-      // Se falhar, retorna o que tem no localStorage para não travar o app
+      console.error("Neon Database: Erro de conexão, mantendo dados locais:", error);
       return storage.getInventory();
     }
   },
 
   getInventory: (): InventoryItem[] => {
     const data = localStorage.getItem(KEYS.INVENTORY);
-    if (!data) {
-      return MATERIALS.map(m => ({ ...m, quantity: 0 }));
-    }
+    if (!data) return MATERIALS.map(m => ({ ...m, quantity: 0 }));
     return JSON.parse(data);
   },
 
@@ -67,41 +139,36 @@ export const storage = {
 
   saveRequest: async (req: MaterialRequest) => {
     const current = storage.getRequests();
-    const updated = [req, ...current];
-    localStorage.setItem(KEYS.REQUESTS, JSON.stringify(updated));
+    localStorage.setItem(KEYS.REQUESTS, JSON.stringify([req, ...current]));
     
-    // Registra a solicitação na aba 'Solicitacoes' da planilha
-    const rows = [
-      new Date().toLocaleString('pt-BR'),
-      req.vtr,
-      req.requesterName,
-      req.items.map(i => `${i.materialName} (x${i.quantity})`).join(', '),
-      req.status
-    ];
-    
-    await storage.syncToCloud('Solicitacoes', rows);
+    if (sql) {
+      try {
+        await sql`
+          INSERT INTO requests (id, vtr, requester_name, items, status)
+          VALUES (${req.id}, ${req.vtr}, ${req.requesterName}, ${JSON.stringify(req.items)}, ${req.status})
+        `;
+      } catch (e) {
+        console.error("Erro ao salvar solicitação no Neon:", e);
+      }
+    }
   },
 
-  updateRequestStatus: (id: string, status: MaterialRequest['status']): boolean => {
+  updateRequestStatus: async (id: string, status: MaterialRequest['status']): Promise<boolean> => {
     const currentRequests = storage.getRequests();
     const requestIndex = currentRequests.findIndex(r => r.id === id);
-    
     if (requestIndex === -1) return false;
+
     const request = currentRequests[requestIndex];
 
-    // Se o pedido for atendido, gera as transações de saída de estoque
     if (status === 'Atendido' && request.status !== 'Atendido') {
       const inventory = storage.getInventory();
-      
-      // Verifica disponibilidade de todos os itens antes de processar
       for (const item of request.items) {
         const invItem = inventory.find(i => i.id === item.materialId);
         if (!invItem || invItem.quantity < item.quantity) return false;
       }
 
-      // Processa as saídas
-      request.items.forEach(item => {
-        storage.saveTransaction({
+      for (const item of request.items) {
+        await storage.saveTransaction({
           id: `req-out-${id}-${item.materialId}`,
           materialId: item.materialId,
           type: 'saida',
@@ -109,11 +176,19 @@ export const storage = {
           date: new Date().toISOString(),
           reason: `Atendimento VTR ${request.vtr}`
         });
-      });
+      }
     }
 
     const updatedRequests = currentRequests.map(r => r.id === id ? { ...r, status } : r);
     localStorage.setItem(KEYS.REQUESTS, JSON.stringify(updatedRequests));
+
+    if (sql) {
+      try {
+        await sql`UPDATE requests SET status = ${status} WHERE id = ${id}`;
+      } catch (e) {
+        console.error("Erro ao atualizar status no Neon:", e);
+      }
+    }
     return true;
   },
 
@@ -124,11 +199,11 @@ export const storage = {
 
   saveTransaction: async (tx: StockTransaction) => {
     const current = storage.getTransactions();
-    const updated = [tx, ...current];
-    localStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(updated));
+    localStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([tx, ...current]));
     
     const inventory = storage.getInventory();
     const itemIdx = inventory.findIndex(i => i.id === tx.materialId);
+    
     if (itemIdx > -1) {
       if (tx.type === 'entrada') {
         inventory[itemIdx].quantity += tx.quantity;
@@ -136,46 +211,24 @@ export const storage = {
         inventory[itemIdx].quantity = Math.max(0, inventory[itemIdx].quantity - tx.quantity);
       }
       
-      // Atualiza localmente imediatamente
+      const newQuantity = inventory[itemIdx].quantity;
       storage.saveInventory(inventory);
       
-      // Registra a transação na aba 'Transacoes'
-      // O script do Google Sheets detectará essa transação e atualizará o saldo mestre na aba 'Estoque'
-      const rows = [
-        new Date(tx.date).toLocaleString('pt-BR'),
-        inventory[itemIdx].code,
-        inventory[itemIdx].name,
-        tx.type.toUpperCase(),
-        tx.quantity,
-        tx.reason,
-        inventory[itemIdx].quantity 
-      ];
-      await storage.syncToCloud('Transacoes', rows);
-    }
-  },
-
-  /**
-   * Envia dados via POST para o Google Apps Script.
-   * Usamos 'no-cors' para evitar problemas de redirecionamento do Google, 
-   * garantindo que os dados cheguem à planilha.
-   */
-  syncToCloud: async (sheetName: string, rows: any[]) => {
-    if (!GOOGLE_SHEET_WEBAPP_URL) return;
-    try {
-      await fetch(GOOGLE_SHEET_WEBAPP_URL, {
-        method: 'POST',
-        mode: 'no-cors', 
-        cache: 'no-cache',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'append',
-          sheet: sheetName,
-          rows: rows
-        })
-      });
-      console.log(`Dados sincronizados com a aba ${sheetName}`);
-    } catch (error) {
-      console.error("Falha na sincronização de saída:", error);
+      if (sql) {
+        try {
+          await sql`
+            UPDATE inventory 
+            SET quantity = ${newQuantity} 
+            WHERE id = ${tx.materialId}
+          `;
+          await sql`
+            INSERT INTO transactions (id, material_id, type, quantity, reason, balance_after)
+            VALUES (${tx.id}, ${tx.materialId}, ${tx.type}, ${tx.quantity}, ${tx.reason}, ${newQuantity})
+          `;
+        } catch (e) {
+          console.error("Erro na transação Neon:", e);
+        }
+      }
     }
   }
 };
